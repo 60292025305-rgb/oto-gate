@@ -1,0 +1,14 @@
+{
+  // Cloudflare Workers 設定ファイル
+  "name": "tennis-game",
+  "main": "worker.js",
+  "compatibility_date": "2025-09-25",
+
+  // Workers の無料プランで動作する設定
+  "workers_dev": true,
+
+  // tennis.html を静的アセットとして Worker スクリプト内に取り込む
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html"], "fallthrough": false }
+  ]
+}

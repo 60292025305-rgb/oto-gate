@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>RETRO TENNIS</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#0a0a1a;display:flex;align-items:center;justify-content:center;
+  height:100vh;overflow:hidden;font-family:'Courier New',monospace;}
+canvas{display:block;image-rendering:pixelated;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+/* ═══════════════════════════
+   キャンバスセットアップ
+═══════════════════════════ */
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = 800, H = 560;
+canvas.width = W; canvas.height = H;
+
+/* ═══════════════════════════
+   定数
+═══════════════════════════ */
+const NET_Y    = H / 2;          // ネット位置（上下分割）
+const COURT_L  = 60;
+const COURT_R  = W - 60;
+const COURT_T  = 40;
+const COURT_B  = H - 40;
+const COURT_W  = COURT_R - COURT_L;
+const COURT_H  = COURT_B - COURT_T;
+const WIN_SCORE = 5;
+
+const PLAYER_W = 28, PLAYER_H = 36;
+const BALL_R   = 7;
+
+/* ═══════════════════════════
+   ゲームステート
+═══════════════════════════ */
+const GS = { TITLE:0, PLAY:1, POINT:2, GAMEOVER:3 };
+let state = GS.TITLE;
+
+/* ═══════════════════════════
+   難易度パラメータ
+═══════════════════════════ */
+const DIFFICULTIES = [
+  { name:'弱い',    eng:'EASY',   color:'#44ff88',
+    spd:2.2, delay:90,  missRate:0.18, chargeProb:0.00, predictAcc:0.30 },
+  { name:'普通',    eng:'NORMAL', color:'#ffdd44',
+    spd:3.2, delay:45,  missRate:0.05, chargeProb:0.04, predictAcc:0.60 },
+  { name:'強い',    eng:'HARD',   color:'#ff8844',
+    spd:4.4, delay:10,  missRate:0.00, chargeProb:0.22, predictAcc:0.88 },
+  { name:'最強',    eng:'EXPERT', color:'#ff3355',
+    spd:5.8, delay:0,   missRate:0.00, chargeProb:0.55, predictAcc:1.00 },
+];
+let diffIdx   = 1;   // 選択中インデックス
+let diffParam = DIFFICULTIES[diffIdx];
+
+/* ═══════════════════════════
+   入力
+═══════════════════════════ */
+const keys = {};
+let enterDown = false, enterDownTime = 0;
+let enterJustReleased = false;
+
+document.addEventListener('keydown', e => {
+  if (keys[e.code]) return;
+  keys[e.code] = true;
+  if (e.code === 'Enter') {
+    if (!enterDown) { enterDown = true; enterDownTime = performance.now(); }
+    e.preventDefault();
+  }
+  if (['ArrowUp','ArrowDown','KeyW','KeyS','KeyA','KeyD'].includes(e.code)) e.preventDefault();
+});
+document.addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'Enter') {
+    if (enterDown) enterJustReleased = true;
+    enterDown = false;
+  }
+});
+
+/* ═══════════════════════════
+   ゲームオブジェクト
+═══════════════════════════ */
+let player, cpu, ball, scores, frame, pointTimer, winner;
+let serveSide;   // 'player' | 'cpu'
+
+function initGame() {
+  diffParam = DIFFICULTIES[diffIdx];
+  scores   = { player: 0, cpu: 0 };
+  serveSide = 'player';
+  frame    = 0;
+  winner   = null;
+  spawnPoint(serveSide);
+  state    = GS.PLAY;
+}
+
+function spawnPoint(server) {
+  player = {
+    x: (COURT_L + COURT_R) / 2,
+    y: COURT_B - 60,
+    w: PLAYER_W, h: PLAYER_H,
+    speed: 4.0,
+    chargeStart: 0,
+    charging: false,
+    swingTimer: 0,
+    swingAngle: 0,
+    hitCooldown: 0,
+    side: 'player',
+  };
+  cpu = {
+    x: (COURT_L + COURT_R) / 2,
+    y: COURT_T + 60,
+    w: PLAYER_W, h: PLAYER_H,
+    speed: diffParam.spd,
+    targetX: (COURT_L + COURT_R) / 2,
+    reactTimer: 0,
+    charging: false,
+    chargeLevel: 0,
+    swingTimer: 0,
+    hitCooldown: 0,
+    missDecided: false,
+    side: 'cpu',
+  };
+  const bx = (COURT_L + COURT_R) / 2 + (Math.random() - 0.5) * 60;
+  ball = {
+    x: bx,
+    y: server === 'player' ? COURT_B - 110 : COURT_T + 110,
+    vx: (Math.random() - 0.5) * 2.5,
+    vy: server === 'player' ? -4.5 : 4.5,
+    speed: 4.5,
+    inPlay: true,
+    lastHit: server,
+    spinning: false,
+    spinAngle: 0,
+  };
+  pointTimer   = 0;
+  enterDown    = false;
+  enterJustReleased = false;
+}
+
+/* ═══════════════════════════
+   ユーティリティ
+═══════════════════════════ */
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t)    { return a + (b - a) * t; }
+function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+function chargeRatio() {
+  if (!enterDown) return 0;
+  return Math.min(1, (performance.now() - enterDownTime) / 900);
+}
+
+/* ═══════════════════════════
+   プレイヤー更新
+═══════════════════════════ */
+function updatePlayer() {
+  const cr     = chargeRatio();
+  const spd    = player.speed * (1 - cr * 0.35);
+  let dx = 0, dy = 0;
+  if (keys['KeyA'] || keys['ArrowLeft'])  dx = -1;
+  if (keys['KeyD'] || keys['ArrowRight']) dx =  1;
+  if (keys['KeyW'] || keys['ArrowUp'])    dy = -1;
+  if (keys['KeyS'] || keys['ArrowDown'])  dy =  1;
+  if (dx && dy) { dx *= 0.707; dy *= 0.707; }
+
+  player.x = clamp(player.x + dx * spd, COURT_L + player.w/2, COURT_R - player.w/2);
+  player.y = clamp(player.y + dy * spd, NET_Y + 8,            COURT_B - player.h/2);
+
+  player.charging = enterDown && cr > 0.05;
+  if (player.swingTimer > 0) player.swingTimer--;
+  if (player.hitCooldown > 0) player.hitCooldown--;
+
+  // スイング発動
+  if (enterJustReleased && player.hitCooldown === 0) {
+    const charge = Math.min(1, (performance.now() - enterDownTime) / 900);
+    tryHit(player, charge);
+    player.swingTimer  = 12;
+    player.hitCooldown = 18;
+    player.swingAngle  = -0.9 + Math.random() * 1.8;
+    enterJustReleased  = false;
+  }
+}
+
+/* ═══════════════════════════
+   ショット処理（両者共通）
+═══════════════════════════ */
+function tryHit(actor, charge) {
+  if (!ball.inPlay) return;
+  const hx = actor.x, hy = actor.y;
+  const reach = 32 + charge * 14;
+  if (dist(hx, hy, ball.x, ball.y) > reach) return;
+
+  // ボールが自分のコート側にあるか
+  const playerSide = actor.side === 'player';
+  if (playerSide  && ball.y < NET_Y) return;
+  if (!playerSide && ball.y > NET_Y) return;
+
+  // タイミングによる角度変化
+  const dx    = ball.x - hx;
+  const base  = dx / (COURT_W / 2);          // -1〜1
+  const jit   = (Math.random() - 0.5) * 0.4 * (1 - charge * 0.7);
+  const angle = clamp(base + jit, -0.88, 0.88);
+
+  const spd   = 5.5 + charge * 6.5;
+  const dir   = playerSide ? -1 : 1;         // 打つ方向（上/下）
+
+  ball.vx = angle * spd;
+  ball.vy = dir * Math.sqrt(Math.max(0, spd * spd - ball.vx * ball.vx));
+  ball.speed   = spd;
+  ball.lastHit = actor.side;
+  ball.spinning = charge > 0.5;
+}
+
+/* ═══════════════════════════
+   CPU AI 更新
+═══════════════════════════ */
+function updateCPU() {
+  const p = diffParam;
+  if (cpu.swingTimer  > 0) cpu.swingTimer--;
+  if (cpu.hitCooldown > 0) cpu.hitCooldown--;
+
+  // 反応ディレイカウントダウン
+  if (cpu.reactTimer > 0) { cpu.reactTimer--; return; }
+
+  // ボールが CPU コート側に向かっているか
+  const ballComing = ball.vy < 0 && ball.y < NET_Y + 80;
+
+  if (ballComing) {
+    // 落下点予測
+    let predX = ball.x;
+    if (Math.random() < p.predictAcc) {
+      // ネットまでの時間で横位置を予測
+      const tToHit = Math.abs((cpu.y - ball.y) / (ball.vy || -0.01));
+      predX = clamp(ball.x + ball.vx * tToHit, COURT_L + 20, COURT_R - 20);
+    }
+    // ミス演出（easy）
+    if (!cpu.missDecided && Math.random() < p.missRate) {
+      predX += (Math.random() - 0.5) * 120;
+      cpu.missDecided = true;
+    }
+    cpu.targetX = predX;
+
+    // チャージ判断
+    const closeEnough = dist(cpu.x, cpu.y, ball.x, ball.y) < 70;
+    if (closeEnough && Math.random() < p.chargeProb / 60) {
+      cpu.charging   = true;
+      cpu.chargeLevel = Math.min(1, cpu.chargeLevel + 0.025 + Math.random() * 0.01);
+    }
+  } else {
+    // ボールが戻ってきたらセンターへ
+    cpu.targetX = (COURT_L + COURT_R) / 2;
+    cpu.charging    = false;
+    cpu.chargeLevel = 0;
+    cpu.missDecided = false;
+  }
+
+  // 移動
+  const dx = cpu.targetX - cpu.x;
+  const move = Math.min(Math.abs(dx), p.spd);
+  cpu.x = clamp(cpu.x + Math.sign(dx) * move, COURT_L + cpu.w/2, COURT_R - cpu.w/2);
+
+  // ヒット判定
+  if (cpu.hitCooldown === 0 && dist(cpu.x, cpu.y, ball.x, ball.y) < 34 + cpu.chargeLevel * 10) {
+    const canHit = ball.y < NET_Y;
+    if (canHit) {
+      tryHit(cpu, cpu.charging ? cpu.chargeLevel : 0);
+      cpu.swingTimer  = 10;
+      cpu.hitCooldown = 20;
+      cpu.charging    = false;
+      cpu.chargeLevel = 0;
+      // 次の反応ディレイをセット
+      cpu.reactTimer  = p.delay;
+    }
+  }
+}
+
+/* ═══════════════════════════
+   ボール物理
+═══════════════════════════ */
+function updateBall() {
+  if (!ball.inPlay) return;
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+  if (ball.spinning) ball.spinAngle += 0.25;
+
+  // 左右壁反射
+  if (ball.x - BALL_R < COURT_L)  { ball.x = COURT_L + BALL_R;  ball.vx =  Math.abs(ball.vx); }
+  if (ball.x + BALL_R > COURT_R)  { ball.x = COURT_R - BALL_R;  ball.vx = -Math.abs(ball.vx); }
+
+  // ネット判定（通過を試みているか）
+  const prevY = ball.y - ball.vy;
+  const crossingNet = (prevY < NET_Y && ball.y >= NET_Y) ||
+                      (prevY > NET_Y && ball.y <= NET_Y);
+  if (crossingNet) {
+    // ネット通過成功 → そのまま続行。外側から来たら跳ね返す（ネット当て）
+    // ネットの厚さ±4pxで引っかかり判定
+    const netLeft  = COURT_L + COURT_W * 0.08;
+    const netRight = COURT_R - COURT_W * 0.08;
+    if (ball.x < netLeft || ball.x > netRight) {
+      // サイドネット：反射
+      ball.vy *= -0.7;
+      ball.y   = NET_Y + (ball.vy > 0 ? BALL_R : -BALL_R);
+    }
+  }
+
+  // 得点判定（コートアウト）
+  if (ball.y - BALL_R < COURT_T) {
+    // CPU コートアウト → プレイヤー得点
+    awardPoint('player');
+  }
+  if (ball.y + BALL_R > COURT_B) {
+    // プレイヤーコートアウト → CPU得点
+    awardPoint('cpu');
+  }
+  // ネット超えたのに相手が打てなかった場合も同様（vy方向から判断）
+  // 余裕をもたせるため上記OUTで十分
+}
+
+function awardPoint(scorer) {
+  scores[scorer]++;
+  ball.inPlay = false;
+  state       = GS.POINT;
+  pointTimer  = 0;
+  if (scores[scorer] >= WIN_SCORE) {
+    winner = scorer;
+    state  = GS.GAMEOVER;
+  }
+}
+
+/* ═══════════════════════════
+   CPUの反応トリガー
+   （ボールが相手コートを越えた瞬間にディレイスタート）
+═══════════════════════════ */
+let ballWasPlayerSide = false;
+function triggerCPUReact() {
+  const isPlayerSide = ball.y > NET_Y;
+  if (ballWasPlayerSide && !isPlayerSide && ball.lastHit === 'player') {
+    // ボールがプレイヤー側からCPU側へ渡った
+    cpu.reactTimer = diffParam.delay;
+    cpu.missDecided = false;
+  }
+  ballWasPlayerSide = isPlayerSide;
+}
+
+/* ═══════════════════════════
+   ポイント後リセット
+═══════════════════════════ */
+function updatePoint() {
+  pointTimer++;
+  if (pointTimer > 90) {
+    // サーブ権は得点した側へ
+    const server = scores.player > scores.cpu ? 'player' : 'cpu';
+    spawnPoint(server);
+    state = GS.PLAY;
+  }
+}
+
+/* ═══════════════════════════
+   描画：コート
+═══════════════════════════ */
+function drawCourt() {
+  // 背景
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0d1a2a');
+  bg.addColorStop(1, '#0a1218');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // コート面（2色ゾーン）
+  ctx.fillStyle = '#0f4a28';
+  ctx.fillRect(COURT_L, COURT_T, COURT_W, COURT_H / 2);
+  ctx.fillStyle = '#0d4224';
+  ctx.fillRect(COURT_L, NET_Y, COURT_W, COURT_H / 2);
+
+  // コートライン
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth   = 2;
+  // 外枠
+  ctx.strokeRect(COURT_L, COURT_T, COURT_W, COURT_H);
+  // センターライン（縦）
+  ctx.beginPath();
+  ctx.setLineDash([8, 6]);
+  ctx.moveTo((COURT_L + COURT_R) / 2, COURT_T);
+  ctx.lineTo((COURT_L + COURT_R) / 2, COURT_B);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // サービスライン（上下）
+  const sl = COURT_H * 0.22;
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+  ctx.beginPath();
+  ctx.moveTo(COURT_L, COURT_T + sl);
+  ctx.lineTo(COURT_R, COURT_T + sl);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(COURT_L, COURT_B - sl);
+  ctx.lineTo(COURT_R, COURT_B - sl);
+  ctx.stroke();
+
+  // ネット
+  const netY = NET_Y;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(COURT_L, netY - 4, COURT_W, 8);
+  // ネット目
+  ctx.strokeStyle = 'rgba(200,200,200,0.3)';
+  ctx.lineWidth = 0.8;
+  for (let x = COURT_L; x <= COURT_R; x += 12) {
+    ctx.beginPath(); ctx.moveTo(x, netY - 4); ctx.lineTo(x, netY + 4); ctx.stroke();
+  }
+  // ネットポール
+  for (const px2 of [COURT_L, COURT_R]) {
+    ctx.fillStyle = '#cccccc';
+    ctx.fillRect(px2 - 4, netY - 14, 8, 22);
+  }
+  // ネット中央の白バンド
+  ctx.fillStyle = '#fff';
+  ctx.fillRect((COURT_L + COURT_R) / 2 - 5, netY - 6, 10, 12);
+}
+
+/* ═══════════════════════════
+   描画：プレイヤーキャラクター
+═══════════════════════════ */
+function drawCharacter(actor, isPlayer) {
+  const { x, y, w, h, swingTimer, swingAngle, charging } = actor;
+  const cr = isPlayer ? chargeRatio() : (actor.chargeLevel || 0);
+  const col = isPlayer ? '#44aaff' : '#ff5544';
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // チャージエフェクト（オーラ）
+  if (charging && cr > 0.05) {
+    const aR = 28 + cr * 20;
+    const g  = ctx.createRadialGradient(0, 0, 4, 0, 0, aR);
+    g.addColorStop(0, `rgba(${isPlayer?'80,160,255':'255,120,60'},${cr * 0.55})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, aR, 0, Math.PI * 2);
+    ctx.fill();
+    // 粒子風エフェクト
+    for (let i = 0; i < 6; i++) {
+      const a  = (frame * 0.15 + i * Math.PI / 3) % (Math.PI * 2);
+      const r  = 18 + cr * 14 + Math.sin(frame * 0.2 + i) * 4;
+      const px2 = Math.cos(a) * r, py2 = Math.sin(a) * r;
+      ctx.fillStyle = isPlayer ? `rgba(100,180,255,${cr*0.9})` : `rgba(255,140,80,${cr*0.9})`;
+      ctx.beginPath();
+      ctx.arc(px2, py2, 2 + cr * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // 胴体（楕円）
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // 頭
+  ctx.fillStyle = '#ffcc88';
+  ctx.beginPath();
+  ctx.arc(0, -h / 2 - 8, 10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#cc9944';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // ラケット（スイング中はアニメ）
+  const rAngle = swingTimer > 0
+    ? swingAngle * (swingTimer / 12)
+    : (isPlayer ? 0.3 : -0.3);
+  ctx.save();
+  ctx.rotate(rAngle);
+  ctx.strokeStyle = '#dddddd';
+  ctx.lineWidth   = 3;
+  ctx.beginPath();
+  ctx.moveTo(w / 2, 0);
+  ctx.lineTo(w / 2 + 18, -5);
+  ctx.stroke();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(w / 2 + 22, -5, 10, 7, -0.3, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // チャージゲージ（プレイヤーの下）
+  if (isPlayer && enterDown && cr > 0) {
+    const gw = 40, gh = 5;
+    const gx = -gw / 2, gy = h / 2 + 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(gx - 1, gy - 1, gw + 2, gh + 2);
+    const gc = ctx.createLinearGradient(gx, 0, gx + gw, 0);
+    gc.addColorStop(0, '#44ff88');
+    gc.addColorStop(0.6, '#ffdd00');
+    gc.addColorStop(1, '#ff3300');
+    ctx.fillStyle = gc;
+    ctx.fillRect(gx, gy, gw * cr, gh);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(gx - 1, gy - 1, gw + 2, gh + 2);
+    // ラベル
+    ctx.fillStyle = cr > 0.7 ? '#ff3300' : '#ffffff';
+    ctx.font = `bold ${cr > 0.7 ? 10 : 9}px Courier New`;
+    ctx.textAlign = 'center';
+    ctx.fillText(cr > 0.9 ? 'MAX POWER!' : 'CHARGING...', 0, gy - 4);
+  }
+
+  ctx.restore();
+}
+
+/* ═══════════════════════════
+   描画：ボール
+═══════════════════════════ */
+function drawBall() {
+  if (!ball) return;
+  const x = ball.x, y = ball.y;
+  const spd = Math.hypot(ball.vx, ball.vy);
+  const charged = spd > 9;
+
+  ctx.save();
+  // 影
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(x + 2, y + 4, BALL_R * 0.9, BALL_R * 0.45, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 軌跡（高速時）
+  if (spd > 5) {
+    for (let i = 1; i <= 3; i++) {
+      ctx.globalAlpha = 0.12 * (4 - i);
+      ctx.fillStyle   = charged ? '#ffaa44' : '#ccffaa';
+      ctx.beginPath();
+      ctx.arc(x - ball.vx * i * 0.6, y - ball.vy * i * 0.6, BALL_R * (1 - i * 0.15), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ボール本体
+  ctx.rotate(ball.spinAngle);
+  const bg = ctx.createRadialGradient(x - 2, y - 2, 1, x, y, BALL_R);
+  bg.addColorStop(0, charged ? '#ffe880' : '#e8f8a0');
+  bg.addColorStop(1, charged ? '#cc7700' : '#88bb00');
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.arc(x, y, BALL_R, 0, Math.PI * 2);
+  ctx.fill();
+  // ハイライト
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.beginPath();
+  ctx.arc(x - 2, y - 2, BALL_R * 0.38, 0, Math.PI * 2);
+  ctx.fill();
+  // 縫い目
+  ctx.strokeStyle = charged ? 'rgba(255,120,0,0.6)' : 'rgba(150,200,50,0.5)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(x, y, BALL_R * 0.7, ball.spinAngle, ball.spinAngle + Math.PI);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/* ═══════════════════════════
+   描画：HUD・スコア
+═══════════════════════════ */
+function drawHUD() {
+  // スコアパネル
+  const panW = 320, panH = 42;
+  const panX = (W - panW) / 2, panY = 6;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.beginPath();
+  ctx.roundRect(panX, panY, panW, panH, 8);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // スコア数字
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#44aaff';
+  ctx.font = 'bold 26px Courier New';
+  ctx.fillText(scores.player, panX + 60, panY + 30);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '14px Courier New';
+  ctx.fillText('-', W / 2, panY + 30);
+
+  ctx.fillStyle = '#ff5544';
+  ctx.font = 'bold 26px Courier New';
+  ctx.fillText(scores.cpu, panX + panW - 60, panY + 30);
+
+  // ラベル
+  ctx.fillStyle = '#aabbcc';
+  ctx.font = '10px Courier New';
+  ctx.fillText('PLAYER', panX + 60, panY + 12);
+  ctx.fillStyle = diffParam.color;
+  ctx.fillText(`CPU (${diffParam.eng})`, panX + panW - 60, panY + 12);
+
+  // 点数表示（ドット）
+  for (let i = 0; i < WIN_SCORE; i++) {
+    const sx = W / 2 - (WIN_SCORE * 10) / 2 + i * 10 + 5;
+    ctx.fillStyle = i < scores.player ? '#44aaff' : 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.arc(sx, panY + 22, 3.5, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 0; i < WIN_SCORE; i++) {
+    const sx = W / 2 + (WIN_SCORE * 10) / 2 - i * 10 - 5;
+    ctx.fillStyle = i < scores.cpu ? '#ff5544' : 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.arc(sx, panY + 22, 3.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 操作ガイド
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(160,190,210,0.55)';
+  ctx.font = '10px Courier New';
+  const gx = 8, gy = H - 44;
+  ctx.fillText('WASD / ↑↓←→  Move', gx, gy);
+  ctx.fillText('ENTER tap   Normal shot', gx, gy + 12);
+  ctx.fillStyle = 'rgba(255,200,60,0.65)';
+  ctx.fillText('ENTER hold  POWER shot', gx, gy + 24);
+  ctx.fillStyle = 'rgba(160,190,210,0.55)';
+  ctx.fillText('R   Restart / Title', gx, gy + 36);
+
+  // リスタート
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(180,200,220,0.4)';
+  ctx.font = '11px Courier New';
+  ctx.fillText("Press 'R' to restart", W - 10, H - 10);
+}
+
+/* ═══════════════════════════
+   難易度選択画面
+═══════════════════════════ */
+function drawTitle() {
+  // 背景
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#050d18');
+  bg.addColorStop(1, '#091a0e');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // コートシルエット（背景）
+  ctx.globalAlpha = 0.15;
+  ctx.fillStyle = '#0f4a28';
+  ctx.fillRect(COURT_L, COURT_T, COURT_W, COURT_H);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(COURT_L, COURT_T, COURT_W, COURT_H);
+  ctx.beginPath();
+  ctx.moveTo(COURT_L, NET_Y); ctx.lineTo(COURT_R, NET_Y); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // タイトル
+  ctx.textAlign = 'center';
+  const pulse = 0.85 + 0.15 * Math.sin(frame * 0.05);
+  ctx.save();
+  ctx.shadowColor = '#44ff88'; ctx.shadowBlur = 24 * pulse;
+  ctx.fillStyle = `rgba(100,255,160,${pulse})`;
+  ctx.font = 'bold 64px Courier New';
+  ctx.fillText('RETRO TENNIS', W / 2, 130);
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(200,230,210,0.6)';
+  ctx.font = '14px Courier New';
+  ctx.fillText('— SELECT DIFFICULTY —', W / 2, 162);
+
+  // 難易度ボタン
+  const btnW = 200, btnH = 52, gap = 18;
+  const totalH = DIFFICULTIES.length * (btnH + gap) - gap;
+  const startY = H / 2 - totalH / 2 + 10;
+
+  DIFFICULTIES.forEach((d, i) => {
+    const bx = W / 2 - btnW / 2;
+    const by = startY + i * (btnH + gap);
+    const sel = diffIdx === i;
+
+    // ボタン背景
+    if (sel) {
+      const g = ctx.createLinearGradient(bx, by, bx + btnW, by);
+      g.addColorStop(0, `${d.color}22`);
+      g.addColorStop(0.5, `${d.color}44`);
+      g.addColorStop(1, `${d.color}22`);
+      ctx.fillStyle = g;
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    }
+    ctx.beginPath();
+    ctx.roundRect(bx, by, btnW, btnH, 8);
+    ctx.fill();
+
+    // ボーダー
+    ctx.strokeStyle = sel ? d.color : 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = sel ? 2 : 1;
+    ctx.stroke();
+
+    // テキスト
+    ctx.fillStyle = sel ? d.color : 'rgba(200,220,210,0.55)';
+    ctx.font = `bold ${sel ? 20 : 17}px Courier New`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`${d.name}  ${d.eng}`, W / 2, by + btnH / 2 + 7);
+
+    // 選択カーソル
+    if (sel) {
+      ctx.fillStyle = d.color;
+      ctx.font = '18px Courier New';
+      ctx.fillText('▶', bx - 20, by + btnH / 2 + 6);
+      ctx.fillText('◀', bx + btnW + 20, by + btnH / 2 + 6);
+    }
+  });
+
+  // 操作ヒント
+  ctx.fillStyle = 'rgba(180,210,190,0.45)';
+  ctx.font = '12px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('W/S or A/D to select   ENTER to start', W / 2, H - 30);
+
+  // 点滅プロンプト
+  if (Math.floor(frame / 28) % 2 === 0) {
+    ctx.save();
+    ctx.fillStyle = '#ffdd44';
+    ctx.shadowColor = '#ffdd44'; ctx.shadowBlur = 10;
+    ctx.font = 'bold 13px Courier New';
+    ctx.fillText('[ PRESS ENTER TO START ]', W / 2, H - 14);
+    ctx.restore();
+  }
+}
+
+/* ═══════════════════════════
+   ポイント間・ゲームオーバー演出
+═══════════════════════════ */
+function drawPointMsg() {
+  const scored = scores.player > scores.cpu ? 'player' : 'cpu';
+  const t = Math.min(1, pointTimer / 30);
+  ctx.save();
+  ctx.globalAlpha = t * 0.92;
+  ctx.fillStyle = scored === 'player' ? '#44aaff' : '#ff5544';
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${Math.round(36 + t * 8)}px Courier New`;
+  ctx.shadowColor = scored === 'player' ? '#44aaff' : '#ff5544';
+  ctx.shadowBlur = 24;
+  ctx.fillText(scored === 'player' ? '★ POINT! ★' : '  point...', W / 2, H / 2 - 10);
+  ctx.restore();
+}
+
+function drawGameover() {
+  const isWin = winner === 'player';
+  // オーバーレイ
+  ctx.fillStyle = isWin ? 'rgba(0,30,80,0.72)' : 'rgba(60,0,0,0.72)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  const t2 = Math.min(1, frame / 35);
+
+  ctx.save();
+  ctx.globalAlpha = t2;
+  ctx.shadowColor = isWin ? '#44aaff' : '#ff3300';
+  ctx.shadowBlur  = 40;
+  ctx.fillStyle   = isWin ? '#88ddff' : '#ff6655';
+  ctx.font        = `bold ${Math.round(52 + t2 * 8)}px Courier New`;
+  ctx.fillText(isWin ? 'PLAYER WIN!' : 'CPU WIN...', W / 2, H / 2 - 20);
+
+  ctx.fillStyle = 'rgba(220,235,240,0.8)';
+  ctx.font = '18px Courier New';
+  ctx.shadowBlur = 0;
+  ctx.fillText(`${scores.player} - ${scores.cpu}  (${diffParam.eng})`, W / 2, H / 2 + 30);
+
+  if (frame > 80 && Math.floor(frame / 28) % 2 === 0) {
+    ctx.fillStyle = '#ffdd44';
+    ctx.shadowColor = '#ffdd44'; ctx.shadowBlur = 12;
+    ctx.font = 'bold 14px Courier New';
+    ctx.fillText("Press 'R' to return to Title", W / 2, H / 2 + 72);
+  }
+  ctx.restore();
+}
+
+/* ═══════════════════════════
+   タイトル入力処理
+═══════════════════════════ */
+let prevEnterTitle = false;
+function handleTitleInput() {
+  if (keys['KeyW'] || keys['KeyA'] || keys['ArrowUp']   || keys['ArrowLeft'])  diffIdx = (diffIdx + 3) % 4;
+  if (keys['KeyS'] || keys['KeyD'] || keys['ArrowDown'] || keys['ArrowRight']) diffIdx = (diffIdx + 1) % 4;
+  keys['KeyW'] = keys['KeyA'] = keys['ArrowUp']   = keys['ArrowLeft']  = false;
+  keys['KeyS'] = keys['KeyD'] = keys['ArrowDown'] = keys['ArrowRight'] = false;
+
+  const enterNow = keys['Enter'];
+  if (enterNow && !prevEnterTitle) {
+    initGame();
+  }
+  prevEnterTitle = enterNow;
+}
+
+/* ═══════════════════════════
+   メインループ
+═══════════════════════════ */
+let prevEnterPlay = false;
+
+function loop() {
+  frame++;
+
+  // リスタート（Rキー）
+  if (keys['KeyR']) {
+    keys['KeyR'] = false;
+    state = GS.TITLE;
+    frame = 0;
+    prevEnterTitle = true;   // チャタリング防止
+    enterDown = false;
+    enterJustReleased = false;
+    return requestAnimationFrame(loop);
+  }
+
+  // ─── TITLE ───
+  if (state === GS.TITLE) {
+    handleTitleInput();
+    drawTitle();
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  // ─── GAMEOVER ───
+  if (state === GS.GAMEOVER) {
+    drawCourt();
+    drawBall();
+    drawCharacter(player, true);
+    drawCharacter(cpu, false);
+    drawHUD();
+    drawGameover();
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  // ─── POINT ───
+  if (state === GS.POINT) {
+    updatePoint();
+    drawCourt();
+    drawBall();
+    drawCharacter(player, true);
+    drawCharacter(cpu, false);
+    drawHUD();
+    drawPointMsg();
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  // ─── PLAY ───
+  updatePlayer();
+  triggerCPUReact();
+  updateCPU();
+  updateBall();
+
+  // 描画
+  drawCourt();
+  drawBall();
+  drawCharacter(player, true);
+  drawCharacter(cpu, false);
+  drawHUD();
+
+  // チャージゲージ（コート外ヘッダー）
+  if (enterDown) {
+    const cr = chargeRatio();
+    const gw = 160, gh = 7;
+    const gx = (W - gw) / 2, gy = COURT_B + 10;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath(); ctx.roundRect(gx-1,gy-1,gw+2,gh+2,4); ctx.fill();
+    const gc = ctx.createLinearGradient(gx, 0, gx + gw, 0);
+    gc.addColorStop(0, '#44ff88');
+    gc.addColorStop(0.65, '#ffdd00');
+    gc.addColorStop(1, '#ff2200');
+    ctx.fillStyle = gc;
+    ctx.beginPath(); ctx.roundRect(gx, gy, gw * cr, gh, 3); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(gx-1,gy-1,gw+2,gh+2,4); ctx.stroke();
+    ctx.fillStyle = '#ffdd44';
+    ctx.font = 'bold 10px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText('HOLD for POWER', W/2, gy - 4);
+  }
+
+  enterJustReleased = false;
+  requestAnimationFrame(loop);
+}
+
+/* ═══════════════════════════
+   起動
+═══════════════════════════ */
+// roundRect polyfill
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    r = Math.min(r, w/2, h/2);
+    this.beginPath();
+    this.moveTo(x+r, y);
+    this.arcTo(x+w, y, x+w, y+h, r);
+    this.arcTo(x+w, y+h, x, y+h, r);
+    this.arcTo(x, y+h, x, y, r);
+    this.arcTo(x, y, x+w, y, r);
+    this.closePath();
+    return this;
+  };
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
