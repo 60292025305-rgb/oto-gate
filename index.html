@@ -11,7 +11,6 @@ html, body {
   background: #050510;
   font-family: 'Courier New', monospace;
   color: #fff;
-  overflow: hidden;
   user-select: none;
 }
 
@@ -19,19 +18,32 @@ html, body {
 #setup {
   position: fixed; inset: 0;
   display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 18px;
+  align-items: center; justify-content: flex-start;
+  gap: 14px;
   background: radial-gradient(ellipse at 50% 30%, #0a1a3a 0%, #050510 70%);
   z-index: 100;
+  overflow-y: auto;          /* スクロール可能 */
+  padding: 24px 16px 40px;   /* 上下余白 */
 }
 #setup h1 {
-  font-size: 48px; letter-spacing: 10px;
+  font-size: clamp(24px, 6vw, 48px);
+  letter-spacing: clamp(4px, 2vw, 10px);
   color: #88ddff;
   text-shadow: 0 0 24px #44aaff, 0 0 60px #2266cc;
+  margin-top: 8px;
 }
 #setup .subtitle {
-  font-size: 13px; color: rgba(150,200,255,0.55);
-  letter-spacing: 4px; margin-top: -12px;
+  font-size: 12px; color: rgba(150,200,255,0.55);
+  letter-spacing: 3px; margin-top: -10px;
+}
+
+/* 横画面スマホ: さらにコンパクトに */
+@media (orientation: landscape) and (max-height: 500px) {
+  #setup { gap: 10px; padding: 12px 16px 24px; }
+  #setup h1 { font-size: 22px; letter-spacing: 4px; margin-top: 0; }
+  #setup .subtitle { display: none; }
+  #startBtn { padding: 10px 32px; font-size: 14px; margin-top: 0; }
+  .section-label { margin-bottom: -4px; }
 }
 .url-row { display: flex; gap: 10px; width: min(620px, 92vw); }
 #urlInput {
@@ -155,7 +167,7 @@ html, body {
 .search-item-title { font-size: 12px; color: rgba(200,230,255,0.9); line-height: 1.4; }
 
 /* ═══ ゲーム画面 ═══ */
-#gameWrap { position: fixed; inset: 0; display: none; }
+#gameWrap { position: fixed; inset: 0; display: none; overflow: hidden; }
 
 #ytWrap {
   position: absolute; inset: 0;
