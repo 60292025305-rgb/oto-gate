@@ -111,6 +111,47 @@ html, body {
 }
 .bpm-pre:hover { background: rgba(68,136,255,0.2); border-color: rgba(100,180,255,0.6); }
 .bpm-pre.selected { background: rgba(68,136,255,0.3); border-color: #44aaff; color: #88ddff; }
+
+/* BPM タップカウンター */
+.bpm-tap-wrap {
+  display: flex; align-items: center; gap: 10px;
+  width: min(620px, 92vw); flex-wrap: wrap;
+}
+#bpmTapBtn {
+  padding: 8px 16px; border-radius: 8px;
+  border: 2px solid rgba(100,180,255,0.4);
+  background: rgba(100,180,255,0.1);
+  color: #88ddff; font-family: 'Courier New', monospace;
+  font-size: 13px; cursor: pointer; transition: all .1s;
+}
+#bpmTapBtn:active { background: rgba(100,180,255,0.3); transform: scale(0.96); }
+#bpmTapResult {
+  font-size: 22px; font-weight: bold; color: #ffdd44;
+  min-width: 52px; text-align: center;
+  text-shadow: 0 0 10px rgba(255,221,68,0.5);
+}
+#bpmTapApply {
+  padding: 6px 14px; border-radius: 6px;
+  border: 1px solid #44ff88; background: rgba(68,255,136,0.12);
+  color: #44ff88; font-family: 'Courier New', monospace;
+  font-size: 12px; cursor: pointer;
+}
+#bpmTapReset {
+  padding: 6px 12px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.2); background: transparent;
+  color: rgba(255,255,255,0.4); font-family: 'Courier New', monospace;
+  font-size: 11px; cursor: pointer;
+}
+
+/* 音量スライダー */
+.volume-rows { display: flex; flex-direction: column; gap: 10px; width: min(620px, 92vw); }
+.vol-row { display: flex; align-items: center; gap: 12px; }
+.vol-label { font-size: 12px; color: rgba(180,220,255,0.7); min-width: 80px; }
+.vol-row input[type="range"] {
+  flex: 1; height: 4px; accent-color: #44aaff;
+  cursor: pointer;
+}
+.vol-val { font-size: 12px; color: rgba(180,220,255,0.7); min-width: 28px; text-align: right; }
 .diff-btn {
   padding: 8px 22px; border-radius: 20px;
   border: 2px solid transparent;
@@ -372,6 +413,28 @@ html, body {
     </div>
   </div>
 
+  <!-- BPM カウンター -->
+  <div class="bpm-tap-wrap">
+    <button id="bpmTapBtn">🥁 TAP TO DETECT BPM</button>
+    <span id="bpmTapResult">--</span>
+    <button id="bpmTapApply" style="display:none">→ 適用</button>
+    <button id="bpmTapReset">リセット</button>
+  </div>
+
+  <p class="section-label">▸ 音量設定</p>
+  <div class="volume-rows">
+    <div class="vol-row">
+      <span class="vol-label">🎵 BGM</span>
+      <input type="range" id="volBgm" min="0" max="100" value="100">
+      <span class="vol-val" id="volBgmVal">100</span>
+    </div>
+    <div class="vol-row">
+      <span class="vol-label">🎹 ヒット音</span>
+      <input type="range" id="volHit" min="0" max="100" value="80">
+      <span class="vol-val" id="volHitVal">80</span>
+    </div>
+  </div>
+
   <p class="section-label">▸ OPTIONS</p>
   <div class="options-row">
     <button id="autoToggle">🤖 AUTO PLAY: OFF</button>
@@ -585,6 +648,80 @@ document.querySelectorAll('.bpm-pre').forEach(btn => {
 updateBpmPresets();
 
 /* ═══════════════════════════════════════
+   BPM タップ検出
+═══════════════════════════════════════ */
+let tapTimes = [];
+let tapTimer = null;
+
+function handleTap() {
+  const now = performance.now();
+  // 3秒以上間が空いたらリセット
+  if (tapTimes.length > 0 && now - tapTimes[tapTimes.length - 1] > 3000) {
+    tapTimes = [];
+  }
+  tapTimes.push(now);
+
+  // タイマーをリセット（2秒無操作でリセット）
+  clearTimeout(tapTimer);
+  tapTimer = setTimeout(() => { tapTimes = []; $('bpmTapResult').textContent = '--'; $('bpmTapApply').style.display = 'none'; }, 3000);
+
+  if (tapTimes.length < 2) {
+    $('bpmTapResult').textContent = '...';
+    return;
+  }
+
+  // 平均BPMを計算
+  const intervals = [];
+  for (let i = 1; i < tapTimes.length; i++) {
+    intervals.push(tapTimes[i] - tapTimes[i - 1]);
+  }
+  const avgInterval = intervals.reduce((a, b) => a + b) / intervals.length;
+  const detectedBpm = Math.round(60000 / avgInterval);
+
+  if (detectedBpm >= 40 && detectedBpm <= 300) {
+    $('bpmTapResult').textContent = detectedBpm;
+    $('bpmTapApply').style.display = 'inline-block';
+    $('bpmTapApply').onclick = () => {
+      customBpm = detectedBpm;
+      updateBpmPresets();
+      $('bpmTapApply').style.display = 'none';
+    };
+  }
+}
+
+$('bpmTapBtn').addEventListener('click', handleTap);
+$('bpmTapBtn').addEventListener('touchstart', e => { e.preventDefault(); handleTap(); }, { passive: false });
+$('bpmTapReset').addEventListener('click', () => {
+  tapTimes = []; clearTimeout(tapTimer);
+  $('bpmTapResult').textContent = '--';
+  $('bpmTapApply').style.display = 'none';
+});
+
+/* ═══════════════════════════════════════
+   音量設定
+═══════════════════════════════════════ */
+let volBgm = 100;  // YouTube 音量 (0〜100)
+let volHit = 80;   // ヒット音量 (0〜1 に変換して使う)
+
+// マスターゲインノード（ヒット音の音量制御）
+const masterGain = audioCtx.createGain();
+masterGain.gain.value = volHit / 100;
+masterGain.connect(audioCtx.destination);
+
+$('volBgm').addEventListener('input', function() {
+  volBgm = parseInt(this.value);
+  $('volBgmVal').textContent = volBgm;
+  if (ytPlayer && typeof ytPlayer.setVolume === 'function') {
+    ytPlayer.setVolume(volBgm);
+  }
+});
+$('volHit').addEventListener('input', function() {
+  volHit = parseInt(this.value);
+  $('volHitVal').textContent = volHit;
+  masterGain.gain.setTargetAtTime(volHit / 100, audioCtx.currentTime, 0.01);
+});
+
+/* ═══════════════════════════════════════
    YouTube ID 抽出
 ═══════════════════════════════════════ */
 function extractVideoId(input) {
@@ -678,9 +815,10 @@ function playHitSound(judge) {
   if (audioCtx.state === 'suspended') audioCtx.resume();
   const now = audioCtx.currentTime;
   const sr  = audioCtx.sampleRate;
+  // 全ての音は masterGain を通す（音量制御）
+  const out = masterGain;
 
   if (judge === 'MISS') {
-    // MISS: 低く短いバスドラム的なドン
     const osc  = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sine';
@@ -688,53 +826,36 @@ function playHitSound(judge) {
     osc.frequency.exponentialRampToValueAtTime(40, now + 0.05);
     gain.gain.setValueAtTime(0.20, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.connect(gain); gain.connect(out);
     osc.start(now); osc.stop(now + 0.09);
     return;
   }
 
-  // PERFECT / GREAT / GOOD: ハイハット系の短いクリック
-  // 楽曲の邪魔にならないよう音量を抑えて高域のノイズのみ
-  const bufLen = Math.floor(sr * 0.025); // 25ms のノイズ
+  const bufLen = Math.floor(sr * 0.025);
   const buf    = audioCtx.createBuffer(1, bufLen, sr);
   const data   = buf.getChannelData(0);
   for (let i = 0; i < bufLen; i++) {
     data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufLen, 2);
   }
-
-  const src   = audioCtx.createBufferSource();
-  const gain  = audioCtx.createGain();
-  const hiPass= audioCtx.createBiquadFilter();
-  const shape = audioCtx.createWaveShaper(); // 少し歪ませてアタック感を出す
-
-  // ディストーション曲線
-  const curve = new Float32Array(256);
+  const src    = audioCtx.createBufferSource();
+  const gain   = audioCtx.createGain();
+  const hiPass = audioCtx.createBiquadFilter();
+  const shape  = audioCtx.createWaveShaper();
+  const curve  = new Float32Array(256);
   for (let i = 0; i < 256; i++) {
     const x = (i * 2) / 256 - 1;
     curve[i] = (Math.PI + 80) * x / (Math.PI + 80 * Math.abs(x));
   }
   shape.curve = curve;
-
   hiPass.type            = 'highpass';
-  hiPass.frequency.value = judge === 'PERFECT' ? 6000
-                         : judge === 'GREAT'   ? 4000
-                         :                       3000;
-
-  const vol = judge === 'PERFECT' ? 0.18
-            : judge === 'GREAT'   ? 0.13
-            :                       0.09;
-
+  hiPass.frequency.value = judge === 'PERFECT' ? 6000 : judge === 'GREAT' ? 4000 : 3000;
+  const vol = judge === 'PERFECT' ? 0.18 : judge === 'GREAT' ? 0.13 : 0.09;
   src.buffer = buf;
   gain.gain.setValueAtTime(vol, now);
   gain.gain.exponentialRampToValueAtTime(0.001, now + 0.025);
-
-  src.connect(shape);
-  shape.connect(hiPass);
-  hiPass.connect(gain);
-  gain.connect(audioCtx.destination);
+  src.connect(shape); shape.connect(hiPass); hiPass.connect(gain); gain.connect(out);
   src.start(now);
 
-  // PERFECT だけ短いトーンを重ねて「ティン」という音を追加
   if (judge === 'PERFECT') {
     const osc  = audioCtx.createOscillator();
     const gOsc = audioCtx.createGain();
@@ -743,7 +864,7 @@ function playHitSound(judge) {
     osc.frequency.exponentialRampToValueAtTime(1200, now + 0.04);
     gOsc.gain.setValueAtTime(0.06, now);
     gOsc.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
-    osc.connect(gOsc); gOsc.connect(audioCtx.destination);
+    osc.connect(gOsc); gOsc.connect(out);
     osc.start(now); osc.stop(now + 0.07);
   }
 }
@@ -885,6 +1006,7 @@ function startGame() {
 
   ytPlayer.seekTo(0, true);
   ytPlayer.setPlaybackRate(1);
+  ytPlayer.setVolume(volBgm); // BGM 音量を適用
   ytPlayer.playVideo();
   // ゲームループは onStateChange の PLAYING 検知後に開始
 
