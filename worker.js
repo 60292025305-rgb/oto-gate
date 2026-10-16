@@ -1,7 +1,7 @@
 // Cloudflare Workers エントリーポイント
-// tennis.html の内容をそのままレスポンスとして返す
+// index.html の内容をそのままレスポンスとして返す
 
-import html from './tennis.html';
+import html from './index.html';
 
 export default {
   fetch() {
