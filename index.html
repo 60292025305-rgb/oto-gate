@@ -220,34 +220,61 @@ html, body {
 /* ═══ スマホ用タッチボタン ═══ */
 #touchBtns {
   position: absolute;
-  bottom: 0; left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  width: min(100vw, 500px);
-  height: 22vh;
   pointer-events: auto;
   z-index: 10;
+  display: flex;
 }
+
+/* 縦画面: 下部に横並び */
+@media (orientation: portrait) {
+  #touchBtns {
+    bottom: 0; left: 50%;
+    transform: translateX(-50%);
+    flex-direction: row;
+    width: min(100vw, 500px);
+    height: 22vh;
+  }
+  #gameCanvas { height: calc(100% - 22vh) !important; }
+}
+
+/* 横画面スマホ: 右側に縦並び */
+@media (orientation: landscape) and (max-height: 500px) {
+  #touchBtns {
+    right: 0; top: 0;
+    flex-direction: column;
+    width: 22vw;
+    height: 100%;
+    transform: none;
+  }
+  #gameCanvas { width: calc(100% - 22vw) !important; }
+  #touchPause { right: calc(22vw + 8px); }
+}
+
 .touch-lane {
   flex: 1;
   border: none; outline: none;
   background: rgba(255,255,255,0.04);
-  border-top: 2px solid rgba(255,255,255,0.15);
-  border-right: 1px solid rgba(255,255,255,0.08);
-  color: rgba(255,255,255,0.4);
+  color: rgba(255,255,255,0.5);
   font-family: 'Courier New', monospace;
-  font-size: 22px; font-weight: bold;
+  font-size: clamp(16px, 4vw, 26px); font-weight: bold;
   cursor: pointer;
   transition: background .05s;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
-.touch-lane:last-child { border-right: none; }
-.touch-lane[data-lane="0"] { border-top-color: rgba(255,68,136,0.5); }
-.touch-lane[data-lane="1"] { border-top-color: rgba(255,170,34,0.5); }
-.touch-lane[data-lane="2"] { border-top-color: rgba(34,221,255,0.5); }
-.touch-lane[data-lane="3"] { border-top-color: rgba(170,68,255,0.5); }
-.touch-lane.active { background: rgba(255,255,255,0.14); }
+@media (orientation: portrait) {
+  .touch-lane { border-top: 3px solid rgba(255,255,255,0.2); border-right: 1px solid rgba(255,255,255,0.1); }
+  .touch-lane:last-child { border-right: none; }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .touch-lane { border-left: 3px solid rgba(255,255,255,0.2); border-bottom: 1px solid rgba(255,255,255,0.1); }
+  .touch-lane:last-child { border-bottom: none; }
+}
+.touch-lane[data-lane="0"] { border-color: rgba(255,68,136,0.7) !important; }
+.touch-lane[data-lane="1"] { border-color: rgba(255,170,34,0.7) !important; }
+.touch-lane[data-lane="2"] { border-color: rgba(34,221,255,0.7) !important; }
+.touch-lane[data-lane="3"] { border-color: rgba(170,68,255,0.7) !important; }
+.touch-lane.active { background: rgba(255,255,255,0.20) !important; color: #fff; }
 
 /* スマホ用ポーズボタン */
 #touchPause {
@@ -262,9 +289,10 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* スマホ時はキャンバスの下部にタッチエリア分の余白 */
-@media (max-width: 768px) {
-  #gameCanvas { height: calc(100% - 22vh) !important; }
+/* PC では touchBtns を非表示 */
+@media (hover: hover) and (pointer: fine) {
+  #touchBtns { display: none; }
+  #touchPause { display: none; }
 }
 
 /* ═══ リザルト画面 ═══ */
