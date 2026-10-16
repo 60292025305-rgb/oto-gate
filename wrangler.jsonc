@@ -1,6 +1,6 @@
 {
   // Cloudflare Workers 設定ファイル
-  "name": "tennis-game",
+  "name": "oto-gate",
   "main": "worker.js",
   "compatibility_date": "2025-09-25",
 
