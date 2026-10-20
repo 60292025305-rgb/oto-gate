@@ -540,6 +540,7 @@ const autoBadge= $('autoBadge');
 let ytPlayer       = null;
 let ytReady        = false;
 let loadedId       = '';
+let pendingLoad    = null;    // YouTube API 準備前のロード予約
 let difficulty     = 'normal';
 let autoPlay       = false;   // AUTO モードフラグ
 let beatmap        = [];
@@ -700,13 +701,13 @@ $('bpmTapReset').addEventListener('click', () => {
 /* ═══════════════════════════════════════
    音量設定
 ═══════════════════════════════════════ */
-let volBgm = 100;  // YouTube 音量 (0〜100)
-let volHit = 80;   // ヒット音量 (0〜1 に変換して使う)
-
-// マスターゲインノード（ヒット音の音量制御）
+const audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
 const masterGain = audioCtx.createGain();
-masterGain.gain.value = volHit / 100;
+masterGain.gain.value = 0.8;
 masterGain.connect(audioCtx.destination);
+
+let volBgm = 100;
+let volHit = 80;
 
 $('volBgm').addEventListener('input', function() {
   volBgm = parseInt(this.value);
@@ -737,7 +738,6 @@ function extractVideoId(input) {
 /* ═══════════════════════════════════════
    YouTube IFrame API
 ═══════════════════════════════════════ */
-let pendingLoad = null;
 window.onYouTubeIframeAPIReady = () => {
   ytReady = true;
   if (pendingLoad) { pendingLoad(); pendingLoad = null; }
@@ -809,7 +809,6 @@ function createPlayer(videoId, onReady) {
 /* ═══════════════════════════════════════
    Web Audio API ヒット音
 ═══════════════════════════════════════ */
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
 function playHitSound(judge) {
   if (audioCtx.state === 'suspended') audioCtx.resume();
